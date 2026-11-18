@@ -1,0 +1,24 @@
+{
+  "name": "motorbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GUI motor-skill benchmark for computer-use agents: pointing, tracing, dragging, scrolling, typing.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "bench": "node bench.ts",
+    "serve": "node bench.ts serve",
+    "test": "node --test --test-concurrency=2 \"test/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.10.0",
+    "playwright": "1.65.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
