@@ -288,6 +288,146 @@ test('marquee: selecting everything scores blue / (blue + red)', async () => {
   near(st.score, 7 / (7 + 9));
 });
 
+test('resize: fixing one of two corners earns about half', async () => {
+  const st = await play(bench, 'resize', 3, 2, (sol) => [sol[0]]);
+  assert.equal(st.done, false);
+  assert.ok(st.score > 0.3 && st.score < 0.7, `score ${st.score}`);
+  assert.equal(metric<number>(st.metrics, 'corners_to_move'), 2);
+});
+
+test('resize: the handle has to be grabbed, and released', async () => {
+  const missed = await play(bench, 'resize', 2, 2, (sol) => {
+    const [[x0, y0], to] = (sol[0] as Drag).path;
+    return [{ type: 'drag', path: [[x0 + 20, y0 + 20], to] }]; // press 20 px away from the 13 px handle
+  });
+  assert.equal(missed.score, 0);
+
+  const st = await play(bench, 'resize', 1, 2, async (sol, ep) => {
+    const [[x0, y0], [x1, y1]] = (sol[0] as Drag).path;
+    await ep.env.act({ type: 'move', x: x0, y: y0 });
+    await ep.env.act({ type: 'mouse_down' });
+    await ep.env.act({ type: 'move', x: x1, y: y1 });
+    const held = await ep.status();
+    assert.equal(held.done, false);
+    near(held.score, 0.5);
+    return [{ type: 'mouse_up' }];
+  });
+  assert.equal(st.success, true);
+});
+
+test('rotate: ten degrees off scores 1 - 10/45', async () => {
+  const st = await play(bench, 'rotate', 2, 3, async (sol, ep) => {
+    const m = (await ep.status()).metrics as { target: number; dial: { x: number; y: number; r: number } };
+    const a = ((m.target + 10) * Math.PI) / 180; // clockwise from straight up
+    const off = [Math.round(m.dial.x + 2 * m.dial.r * Math.sin(a)), Math.round(m.dial.y - 2 * m.dial.r * Math.cos(a))] as [number, number];
+    return [{ type: 'drag', path: [(sol[0] as Drag).path[0], off] }];
+  });
+  assert.equal(metric<number>(st.metrics, 'error_deg'), 10);
+  near(st.score, 1 - 10 / 45);
+  assert.equal(st.done, false);
+});
+
+test('rotate: pressing anywhere but the handle does not turn the dial', async () => {
+  const st = await play(bench, 'rotate', 1, 3, async (sol, ep) => {
+    const { dial } = (await ep.status()).metrics as { dial: { x: number; y: number; r: number } };
+    return [{ type: 'drag', path: [[dial.x, dial.y], (sol[0] as Drag).path[1]] }]; // starts at the hub
+  });
+  assert.equal(st.score, 0);
+  assert.equal(metric<number>(st.metrics, 'drags'), 0);
+});
+
+test('reorder: one move of several earns partial credit; putting a card back changes nothing', async () => {
+  const part = await play(bench, 'reorder', 3, 1, (sol) => {
+    assert.ok(sol.length >= 3, 'level 3 needs several moves');
+    return [sol[0]];
+  });
+  assert.equal(part.done, false);
+  assert.ok(part.score > 0 && part.score < 1, `score ${part.score}`);
+  assert.equal(metric<number>(part.metrics, 'moves'), 1);
+
+  const same = await play(bench, 'reorder', 2, 1, (sol) => {
+    const [from] = (sol[0] as Drag).path;
+    return [{ type: 'drag', path: [from, [from[0] + 150, from[1] + 9], from] }]; // wander off and come back
+  });
+  assert.equal(same.score, 0);
+  assert.equal(metric<number>(same.metrics, 'moves'), 1);
+});
+
+test('drag-bins: tokens in the wrong box cost half a token each', async () => {
+  const st = await play(bench, 'drag-bins', 2, 1, (sol) => {
+    const into = (sol[0] as Drag).path[1];
+    return sol.map((d, i) => ({ type: 'drag', path: [(d as Drag).path[0], [into[0] - 30 + i * 15, into[1]]] }) as Action); // everything into one box
+  });
+  const { correct, wrong } = st.metrics as { correct: number; wrong: number };
+  assert.equal(correct + wrong, 5);
+  assert.ok(wrong >= 2);
+  near(st.score, Math.max(0, (correct - 0.5 * wrong) / 5));
+  assert.equal(st.done, false);
+});
+
+test('drag-bins: a misplaced token can be picked up again and put right', async () => {
+  const st = await play(bench, 'drag-bins', 2, 1, async (sol, ep) => {
+    const drags = sol as Drag[];
+    const first = drags[0].path;
+    const elsewhere = drags.find((d) => Math.abs(d.path[1][0] - first[1][0]) > 100)!.path[1]; // some other box
+    await ep.env.act({ type: 'drag', path: [first[0], elsewhere] });
+    assert.equal((await ep.status()).metrics.wrong, 1);
+    return [{ type: 'drag', path: [elsewhere, first[1]] }, ...drags.slice(1)];
+  });
+  assert.equal(st.success, true);
+  assert.equal(st.score, 1);
+});
+
+test('text-select: one character short scores (n - 1) / n; a click selects nothing', async () => {
+  const short = await play(bench, 'text-select', 1, 2, (sol) => {
+    const [from, [x1, y1]] = (sol[0] as Drag).path;
+    return [{ type: 'drag', path: [from, [x1 - 18, y1]] }]; // characters are 18 px wide at level 1
+  });
+  const n = metric<string>(short.metrics, 'phrase').length;
+  assert.equal(metric<string>(short.metrics, 'selected'), metric<string>(short.metrics, 'phrase').slice(0, -1));
+  near(short.score, (n - 1) / n);
+  assert.equal(short.done, false);
+
+  const click = await play(bench, 'text-select', 1, 2, (sol) => {
+    const [[x, y]] = (sol[0] as Drag).path;
+    return [sol[0], { type: 'click', x, y }]; // the right selection, then a click that clears it
+  });
+  assert.equal(click.score, 1, 'the episode ends as soon as the selection is right');
+
+  const cleared = await play(bench, 'text-select', 1, 2, (sol) => {
+    const [[x0, y0], [x1, y1]] = (sol[0] as Drag).path;
+    return [{ type: 'drag', path: [[x0, y0], [x1 + 36, y1]] }, { type: 'click', x: x0, y: y0 }];
+  });
+  assert.equal(cleared.score, 0);
+});
+
+test('text-select: selecting far too much earns little', async () => {
+  const st = await play(bench, 'text-select', 3, 1, (sol) => {
+    const [[, y0], [, y1]] = (sol[0] as Drag).path;
+    return [{ type: 'drag', path: [[40, y0 - 200], [1240, y1 + 200]] }]; // the whole block
+  });
+  assert.ok(st.score > 0 && st.score < 0.2, `score ${st.score}`);
+});
+
+test('pan: part of the way earns part of the score; the map has to be released', async () => {
+  const part = await play(bench, 'pan', 3, 1, (sol) => {
+    assert.ok(sol.length >= 3, 'level 3 needs several drags');
+    return [sol[0]];
+  });
+  assert.equal(part.done, false);
+  assert.ok(part.score > 0.1 && part.score < 0.6, `score ${part.score}`);
+
+  const st = await play(bench, 'pan', 1, 1, async (sol, ep) => {
+    const [[x0, y0], [x1, y1]] = (sol[0] as Drag).path;
+    await ep.env.act({ type: 'move', x: x0, y: y0 });
+    await ep.env.act({ type: 'mouse_down' });
+    await ep.env.act({ type: 'move', x: x1, y: y1 });
+    near((await ep.status()).score, 0.5);
+    return [{ type: 'mouse_up' }];
+  });
+  assert.equal(st.success, true);
+});
+
 // ---- scrolling ----------------------------------------------------------------
 
 test('scroll-click: bringing the row into view without clicking earns 0.3', async () => {

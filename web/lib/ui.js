@@ -75,12 +75,14 @@ export function rect(g, r, { fill, color, width = 2, dash = null, radius = 0 }) 
   }
 }
 
-export function text(g, str, x, y, { size = 16, color = C.ink, align = 'left', baseline = 'alphabetic', weight = 400, font = FONT } = {}) {
+/** With maxWidth, text that would be wider is condensed horizontally to fit. */
+export function text(g, str, x, y, { size = 16, color = C.ink, align = 'left', baseline = 'alphabetic', weight = 400, font = FONT, maxWidth } = {}) {
   g.font = `${weight} ${size}px ${font}`;
   g.fillStyle = color;
   g.textAlign = align;
   g.textBaseline = baseline;
-  g.fillText(str, x, y);
+  if (maxWidth) g.fillText(str, x, y, maxWidth);
+  else g.fillText(str, x, y);
 }
 
 export function check(g, x, y, size, color = '#fff') {

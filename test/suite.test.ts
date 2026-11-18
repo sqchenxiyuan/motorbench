@@ -15,7 +15,7 @@ after(() => bench.close());
 const LEVELS = [1, 2, 3];
 
 test('the catalogue has the expected tasks', () => {
-  assert.equal(bench.catalogue.length, 15);
+  assert.equal(bench.catalogue.length, 21);
   assert.deepEqual([...new Set(bench.catalogue.map((t) => t.category))], ['pointing', 'path', 'drag', 'scroll', 'keyboard']);
 });
 

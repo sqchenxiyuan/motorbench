@@ -53,7 +53,7 @@ test('health and catalogue', async () => {
   assert.equal(health.status, 200);
   assert.equal(health.data.ok, true);
   const tasks = await api('GET', '/api/tasks');
-  assert.equal(tasks.data.tasks.length, 15);
+  assert.equal(tasks.data.tasks.length, 21);
   assert.deepEqual(tasks.data.viewport, { width: 1280, height: 800 });
 });
 

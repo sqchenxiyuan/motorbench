@@ -1,13 +1,17 @@
 // Page runtime: builds one task instance from the URL, captures trusted input,
 // renders, and exposes the result on window.__bench.
 //
-//   /?task=<id>&level=<1..3>&seed=<int>      one task instance
-//   /                                        task menu (for trying tasks by hand)
+//   /?task=<id>&level=<1..3>&seed=<int>      one task instance (what the harness loads)
+//   /?task=...&hud=1                         the same, for trying by hand: live score, next instance loads by itself
+//   /?start=quick|standard|full              start a scored run through all tasks (see suite.js)
+//   /?run=<id>&results=1                     the scorecard of a run
+//   /                                        menu
 //
-// Optional: &hud=1 (live score readout), &cursor=0 (do not draw the pointer).
+// Optional: &cursor=0 (do not draw the pointer).
 import { TASK_LIST, TASKS, CATEGORIES } from './tasks/index.js';
 import { makeRng, hashStr } from './lib/rng.js';
 import { C, MONO, drawCursor, rect, text } from './lib/ui.js';
+import { PRESETS, createRun, episodeUrl, exportRun, lastRun, loadRun, nextIndex, renderResults, resultsUrl, saveRun, storageOk, summarize } from './suite.js';
 
 const params = new URLSearchParams(location.search);
 const BAR = 56;
@@ -16,17 +20,43 @@ const r1 = (v) => Math.round(v * 10) / 10;
 
 window.__benchTasks = TASK_LIST.map(({ id, title, category, summary }) => ({ id, title, category, summary }));
 
-if (params.get('task')) boot(params.get('task'));
+if (params.get('start')) startRun();
+else if (params.get('run') && params.get('results')) scorecard();
+else if (params.get('task')) boot(params.get('task'));
 else menu();
 
-function menu() {
+/** Show a plain document page (menu, scorecard, messages) instead of a task. */
+function page(html, extra = {}) {
   document.body.classList.add('menu');
   const el = $('menu');
   el.hidden = false;
+  el.innerHTML = html;
+  window.__bench = { ready: true, menu: true, ...extra };
+}
+
+function menu() {
   const seed = Math.floor(Math.random() * 100000);
-  let html =
-    '<h1>motorbench</h1><p>Basic mouse and keyboard skills for computer-use agents. ' +
-    'Pick a task and a difficulty level to try it by hand; the score is shown live in the top bar.</p>';
+  let html = '<h1>motorbench</h1><p>Basic mouse and keyboard skills for computer-use agents: pointing, following paths, dragging, scrolling, typing.</p>';
+
+  html +=
+    '<div class="runbox"><h2>Scored run</h2><p>Work through the tasks one after another and get a scorecard at the end. ' +
+    'A task moves on by itself once it is completed; press <b>Done</b> in the top bar to move on without completing it.</p><div class="presets">';
+  for (const [id, p] of Object.entries(PRESETS)) {
+    html += `<a class="preset" href="?start=${id}"><b>${p.title}</b><span>${TASK_LIST.length * p.levels.length * p.seeds.length} episodes</span><small>${p.about}</small></a>`;
+  }
+  html += '</div>';
+  const last = lastRun();
+  if (last) {
+    const s = summarize(last);
+    const next = nextIndex(last);
+    html +=
+      next >= 0
+        ? `<p class="resume">Unfinished run: ${s.attempted} of ${s.episodes} episodes done. <a href="${episodeUrl(last, next)}">Resume</a> · <a href="${resultsUrl(last)}">scorecard so far</a></p>`
+        : `<p class="resume">Last run: score ${(s.score * 100).toFixed(1)}. <a href="${resultsUrl(last)}">Scorecard</a></p>`;
+  }
+  html += '</div>';
+
+  html += '<p class="lead">Or practise a single task. The score is shown live in the top bar, and the next instance loads by itself when you complete one.</p>';
   for (const cat of CATEGORIES) {
     html += `<h2>${cat.title}</h2>`;
     for (const t of TASK_LIST.filter((x) => x.category === cat.id)) {
@@ -37,8 +67,28 @@ function menu() {
   html +=
     '<p class="foot">These pages score themselves. The harness that drives them, the scoring rules and the HTTP API for agents are at ' +
     '<a href="https://github.com/sqchenxiyuan/motorbench">github.com/sqchenxiyuan/motorbench</a>.</p>';
-  el.innerHTML = html;
-  window.__bench = { ready: true, menu: true };
+  page(html);
+}
+
+function startRun() {
+  if (!storageOk()) return page('<h1>Scored run</h1><p>A scored run keeps its progress in this browser\'s local storage, which is not available here (private window?).</p><p class="actions"><a class="btn" href="./">Back to the menu</a></p>');
+  const run = createRun(params);
+  if (!run) return page('<h1>Scored run</h1><p>No task matches this link.</p><p class="actions"><a class="btn" href="./">Back to the menu</a></p>');
+  location.replace(episodeUrl(run, 0));
+}
+
+function scorecard() {
+  const run = loadRun(params.get('run'));
+  if (!run) return page('<h1>Scorecard</h1><p>This run is not stored in this browser.</p><p class="actions"><a class="btn" href="./">Back to the menu</a></p>');
+  const data = exportRun(run);
+  page(renderResults(run), { results: data });
+  $('download').addEventListener('click', (e) => {
+    e.preventDefault();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+    a.download = `motorbench-${run.preset}-${run.startedAt.slice(0, 10)}.json`;
+    a.click();
+  });
 }
 
 function fail(msg) {
@@ -53,15 +103,53 @@ function boot(taskId) {
 
   const level = Math.min(3, Math.max(1, parseInt(params.get('level') ?? '1', 10) || 1));
   const seed = parseInt(params.get('seed') ?? '1', 10) || 0;
-  const hud = params.get('hud') === '1';
+
+  // Part of a scored run? Then this page must be the run's next unfinished episode.
+  let run = null;
+  let runIndex = -1;
+  if (params.get('run')) {
+    run = loadRun(params.get('run'));
+    runIndex = parseInt(params.get('i') ?? '', 10);
+    const planned = run?.episodes[runIndex];
+    if (!planned || planned.task !== taskId || planned.level !== level || planned.seed !== seed) {
+      $('hud').innerHTML = '<a href="./">menu</a>';
+      return fail('This scored run is not stored in this browser. Start a new one from the menu.');
+    }
+    if (run.results[runIndex]) {
+      // Already scored: an episode cannot be played twice.
+      const next = nextIndex(run);
+      location.replace(next < 0 ? resultsUrl(run) : episodeUrl(run, next));
+      return;
+    }
+  }
+  // 'bare' is what the harness uses: no controls, nothing that moves on by itself.
+  const mode = run ? 'run' : params.get('hud') === '1' ? 'free' : 'bare';
   const showCursor = params.get('cursor') !== '0';
-  const W = window.innerWidth;
-  const H = window.innerHeight;
+  const stage = run?.viewport ?? null;
+  const W = stage ? stage.width : window.innerWidth;
+  const H = stage ? stage.height : window.innerHeight;
   const dpr = window.devicePixelRatio || 1;
+  if (stage && (window.innerWidth < W || window.innerHeight < H)) {
+    window.addEventListener('resize', () => {
+      if (window.innerWidth >= W && window.innerHeight >= H) location.reload();
+    });
+    return fail(`This run uses a ${W}×${H} stage, and the window is only ${window.innerWidth}×${window.innerHeight}. Enlarge the window or zoom out (Ctrl or ⌘ with −); the task appears as soon as it fits.`);
+  }
 
   document.body.classList.add('task');
   if (!showCursor) document.body.classList.add('oscursor');
   $('bar').hidden = false;
+  if (stage) {
+    // Fixed stage in the top-left corner: page coordinates are stage coordinates.
+    document.body.classList.add('stage');
+    Object.assign($('bar').style, { right: 'auto', width: `${W}px` });
+    Object.assign($('widgets').style, { right: 'auto', bottom: 'auto', width: `${W}px`, height: `${H}px` });
+  }
+  if (run) {
+    run.opened[runIndex] = (run.opened[runIndex] || 0) + 1;
+    if (run.opened[runIndex] > 1) run.restarts++;
+    saveRun(run);
+  }
 
   const main = $('main');
   main.hidden = false;
@@ -119,8 +207,12 @@ function boot(taskId) {
   const isField = (el) => el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
   const isLink = (el) => el instanceof HTMLAnchorElement;
 
+  const inHud = (el) => el instanceof Element && !!el.closest('#hud');
+
   let dirty = true; // the canvas is repainted only after input (or when a task asks for it)
+  let finishing = false; // set once the episode has been scored by this page (run and practice modes)
   function emit(ev) {
+    if (finishing) return;
     ev.left = ptr.left;
     dirty = true;
     try {
@@ -155,7 +247,9 @@ function boot(taskId) {
     for (const c of parts) moveTo(c.clientX, c.clientY, c.timeStamp || e.timeStamp, c.buttons);
     moveTo(e.clientX, e.clientY, e.timeStamp, e.buttons);
   });
+  // Presses on the controls in the top bar (Done, next, ...) are not input to the task.
   on('mousedown', (e) => {
+    if (inHud(e.target)) return;
     moveTo(e.clientX, e.clientY, e.timeStamp);
     if (e.button === 0) ptr.left = true;
     rec('d', rel(e.timeStamp), r1(e.clientX), r1(e.clientY), e.button);
@@ -163,22 +257,25 @@ function boot(taskId) {
     if (!isField(e.target) && !isLink(e.target)) e.preventDefault();
   });
   on('mouseup', (e) => {
+    if (inHud(e.target) && !ptr.left) return; // a drag that ends over the bar is still released
     moveTo(e.clientX, e.clientY, e.timeStamp);
     if (e.button === 0) ptr.left = false;
     rec('u', rel(e.timeStamp), r1(e.clientX), r1(e.clientY), e.button);
     emit({ type: 'up', button: e.button, x: e.clientX, y: e.clientY, t: e.timeStamp });
   });
   on('click', (e) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || inHud(e.target)) return;
     rec('c', rel(e.timeStamp), r1(e.clientX), r1(e.clientY), e.detail);
     emit({ type: 'click', x: e.clientX, y: e.clientY, detail: e.detail, t: e.timeStamp });
   });
   on('dblclick', (e) => {
+    if (inHud(e.target)) return;
     rec('dc', rel(e.timeStamp), r1(e.clientX), r1(e.clientY));
     emit({ type: 'dblclick', x: e.clientX, y: e.clientY, t: e.timeStamp });
   });
   on('contextmenu', (e) => {
     e.preventDefault();
+    if (inHud(e.target)) return;
     rec('cx', rel(e.timeStamp), r1(e.clientX), r1(e.clientY));
     emit({ type: 'context', x: e.clientX, y: e.clientY, t: e.timeStamp });
   });
@@ -281,6 +378,53 @@ function boot(taskId) {
     text(g, label, 24, H - 27, { size: 14, color: '#fff', baseline: 'middle', weight: 600, font: MONO });
   }
 
+  // ---- finishing an episode (practice and run modes) ------------------------------
+  const flashEl = $('flash');
+  function flash(s, note) {
+    flashEl.innerHTML = `<b class="${s.success ? 'pass' : 'part'}">${s.success ? '✓ ' : ''}${s.score.toFixed(3)}</b><small>${note}</small>`;
+    Object.assign(flashEl.style, { left: `${W / 2}px`, top: `${BAR + (H - BAR) / 2}px` });
+    flashEl.hidden = false;
+  }
+  function finish(endedBy) {
+    if (finishing) return;
+    const s = status();
+    finishing = true; // from here on input is ignored
+    if (!run) {
+      flash(s, 'next one in a moment');
+      const next = new URLSearchParams(params);
+      next.set('seed', String(seed + 1));
+      setTimeout(() => location.assign(`?${next}`), 1500);
+      return;
+    }
+    run.results[runIndex] = {
+      task: taskId,
+      level,
+      seed,
+      category: def.category,
+      score: s.score,
+      success: s.success,
+      endedBy,
+      seconds: Math.round((performance.now() - t0) / 100) / 10,
+      metrics: s.metrics,
+    };
+    const next = nextIndex(run);
+    if (next < 0) run.finishedAt = new Date().toISOString();
+    saveRun(run);
+    flash(s, next < 0 ? 'run complete' : `${runIndex + 1} of ${run.episodes.length} done`);
+    setTimeout(() => location.assign(next < 0 ? resultsUrl(run) : episodeUrl(run, next)), s.success ? 900 : 1300);
+  }
+
+  if (mode === 'free') {
+    const next = new URLSearchParams(params);
+    next.set('seed', String(seed + 1));
+    $('hud').innerHTML = `<span id="live"></span><a href="${location.search}">retry</a><a href="?${next}">next</a><a href="./">menu</a>`;
+    window.addEventListener('resize', () => location.reload());
+  } else if (mode === 'run') {
+    // No live score in a run: the score is only shown once the episode is over.
+    $('hud').innerHTML = `<span id="progress">${runIndex + 1} / ${run.episodes.length}</span><span id="timer"></span><button id="done" type="button" tabindex="-1">Done ›</button><a href="./">quit</a>`;
+    $('done').addEventListener('click', () => finish('done_button'));
+  }
+
   // ---- render loop -----------------------------------------------------------
   let hudText = '';
   function frame(now) {
@@ -301,24 +445,25 @@ function boot(taskId) {
       console.error(err);
       if (errors.length < 5) errors.push(String(err?.stack || err));
     }
-    if (hud) {
+    if (mode !== 'bare' && !finishing) {
       const s = status();
-      const t = `score ${s.score.toFixed(3)}${s.done ? ' · done' : ''}${s.success ? ' ✓' : ''}`;
-      if (t !== hudText) $('hud').firstChild.textContent = hudText = t;
+      let t = '';
+      if (mode === 'free') t = `score ${s.score.toFixed(3)}`;
+      else {
+        const left = Math.max(0, Math.ceil(run.limitSec - (performance.now() - t0) / 1000));
+        t = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+        if (left <= 0 && !s.done) finish('timeout');
+      }
+      if (t !== hudText) $(mode === 'free' ? 'live' : 'timer').textContent = hudText = t;
+      if (s.done) finish('task_complete');
     }
     requestAnimationFrame(frame);
-  }
-
-  if (hud) {
-    const next = new URLSearchParams(params);
-    next.set('seed', String(seed + 1));
-    $('hud').innerHTML = `<span></span><a href="${location.search}">retry</a><a href="?${next}">next</a><a href="./">menu</a>`;
-    window.addEventListener('resize', () => location.reload());
   }
   requestAnimationFrame(frame);
 
   window.__bench = {
     ready: true,
+    mode,
     spec: () => ({
       task: taskId,
       title: def.title,

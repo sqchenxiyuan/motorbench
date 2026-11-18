@@ -291,7 +291,8 @@ export function formatSummary(s: SuiteSummary): string {
   for (const [id, t] of Object.entries(s.byTask)) {
     if (t.category !== cat) {
       cat = t.category;
-      lines.push(`-- ${cat} ${'-'.repeat(Math.max(0, 52 - cat.length))}`);
+      const c = s.byCategory[cat];
+      lines.push(`-- ${cat} ${'-'.repeat(Math.max(0, 12 - cat.length))} ${pct(c.score)} ${pct(c.success)}  ${'-'.repeat(31)}`);
     }
     lines.push(`${id.padEnd(16)} ${pct(t.score)} ${pct(t.success)}  ${levels.map((l) => (t.byLevel[l] ? pct(t.byLevel[l].score) : '    -')).join(' ')}  ${t.actions.toFixed(1).padStart(7)} ${t.seconds.toFixed(1).padStart(6)}`);
   }

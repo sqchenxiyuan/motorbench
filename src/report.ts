@@ -56,7 +56,8 @@ export async function writeReport(outDir: string, s: SuiteSummary, results: Epis
   for (const [id, t] of Object.entries(s.byTask)) {
     if (t.category !== cat) {
       cat = t.category;
-      rows.push(`<tr class="cat"><td colspan="${5 + levels.length}">${esc(cat)}</td></tr>`);
+      const c = s.byCategory[cat];
+      rows.push(`<tr class="cat"><td>${esc(cat)}</td><td>${pct(c.score)}</td><td>${pct(c.success)}</td><td colspan="${2 + levels.length}"></td></tr>`);
     }
     const cells = levels.map((l) => (t.byLevel[l] ? `<td style="${shade(t.byLevel[l].score)}">${pct(t.byLevel[l].score)}</td>` : '<td>–</td>')).join('');
     rows.push(
@@ -98,7 +99,7 @@ ${r.error ? `<div class="cap err">${esc(r.error)}</div>` : ''}<details><summary>
 <div class="scroll"><table><thead><tr><th>task</th><th>score</th><th>pass %</th>${levels.map((l) => `<th>L${l}</th>`).join('')}<th>actions</th><th>seconds</th></tr></thead><tbody>
 ${rows.join('\n')}
 </tbody></table></div>
-<p class="sub">Score is continuous (0–100, partial credit); pass is the strict criterion. Level columns show the score.</p>
+<p class="sub">Score is continuous (0–100, partial credit); pass is the strict criterion. Level columns show the score. Category rows are the mean over that category's tasks; the overall score weights every task equally.</p>
 <h2>Episodes</h2>
 <p class="sub">Final screenshot of every episode with the pointer trail overlaid: magenta = moving with no button pressed, orange = button held. The dashed line is the reference path where there is one.</p>
 ${sections.join('\n')}

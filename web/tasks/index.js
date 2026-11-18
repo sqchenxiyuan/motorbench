@@ -10,6 +10,12 @@ import { dragDrop } from './drag-drop.js';
 import { slider } from './slider.js';
 import { drawTrace } from './draw-trace.js';
 import { marquee } from './marquee.js';
+import { dragBins } from './drag-bins.js';
+import { resize } from './resize.js';
+import { rotate } from './rotate.js';
+import { reorder } from './reorder.js';
+import { textSelect } from './text-select.js';
+import { pan } from './pan.js';
 import { scrollClick } from './scroll-click.js';
 import { typeText } from './type-text.js';
 import { hotkey } from './hotkey.js';
@@ -25,7 +31,7 @@ export const CATEGORIES = [
 export const TASK_LIST = [
   click, doubleClick, rightClick, clickSequence, hover,
   tracePath, traceOutline, maze,
-  dragDrop, slider, drawTrace, marquee,
+  dragDrop, dragBins, reorder, resize, slider, rotate, pan, drawTrace, marquee, textSelect,
   scrollClick,
   typeText, hotkey,
 ];
